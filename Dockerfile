@@ -116,5 +116,8 @@ COPY --from=frontend-builder --chown=redash /frontend/client/dist /app/client/di
 RUN chown redash /app
 USER redash
 
+VOLUME ["/tmp", "/var/tmp", "/usr/tmp", "/app", "/home/redash"]
+
 ENTRYPOINT ["/app/bin/docker-entrypoint"]
+
 CMD ["server"]
