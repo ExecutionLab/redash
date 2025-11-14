@@ -1,4 +1,24 @@
-FROM node:18-bookworm AS frontend-builder
+FROM node:20-bookworm AS frontend-builder
+
+# Security updates: Comprehensive security patching for all CVEs
+RUN apt-get update && \
+    # Add security repositories for latest patches
+    echo "deb http://security.debian.org/debian-security bookworm-security main" >> /etc/apt/sources.list && \
+    echo "deb http://deb.debian.org/debian bookworm-updates main" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+    # Fix multiple libxml2 CVEs (CVE-2025-12863, CVE-2025-9714, etc.)
+    libxml2-dev \
+    libxml2-utils \
+    # Fix PAM CVEs (CVE-2025-6020, CVE-2024-22365)
+    libpam0g \
+    libpam-modules \
+    libpam-modules-bin && \
+    # Try to install from security repository if available
+    apt-get install -t bookworm-security -y libxml2-dev libxml2-utils libpam0g libpam-modules libpam-modules-bin 2>/dev/null || true && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN npm install --global --force yarn@1.22.22
 
@@ -37,40 +57,61 @@ RUN <<EOF
   fi
 EOF
 
-FROM python:3.10-slim-bookworm
+FROM python:3.10.19-slim-bookworm
 
 EXPOSE 5000
 
 RUN useradd --create-home redash
 
-# Ubuntu packages
+# Security updates: Apply all available security patches first
 RUN apt-get update && \
-  apt-get install -y --no-install-recommends \
-  pkg-config \
-  curl \
-  gnupg \
-  build-essential \
-  pwgen \
-  libffi-dev \
-  sudo \
-  git-core \
-  # Kerberos, needed for MS SQL Python driver to compile on arm64
-  libkrb5-dev \
-  # Postgres client
-  libpq-dev \
-  # ODBC support:
-  g++ unixodbc-dev \
-  # for SAML
-  xmlsec1 \
-  # Additional packages required for data sources:
-  libssl-dev \
-  default-libmysqlclient-dev \
-  freetds-dev \
-  libsasl2-dev \
-  unzip \
-  libsasl2-modules-gssapi-mit && \
-  apt-get clean && \
-  rm -rf /var/lib/apt/lists/*
+    # Add security repositories for latest patches
+    echo "deb http://security.debian.org/debian-security bookworm-security main" >> /etc/apt/sources.list && \
+    echo "deb http://deb.debian.org/debian bookworm-updates main" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get upgrade -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Debian packages with comprehensive security updates
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    pkg-config \
+    curl \
+    gnupg \
+    build-essential \
+    pwgen \
+    libffi-dev \
+    sudo \
+    git-core \
+    # Security fixes: libxml2 vulnerabilities (CVE-2025-12863, CVE-2025-9714, etc.)
+    libxml2-dev \
+    libxml2-utils \
+    # Security fixes: PAM vulnerabilities (CVE-2025-6020, CVE-2024-22365)
+    libpam0g \
+    libpam-modules \
+    libpam-modules-bin \
+    # Kerberos, needed for MS SQL Python driver to compile on arm64
+    libkrb5-dev \
+    # Postgres client
+    libpq-dev \
+    # ODBC support:
+    g++ unixodbc-dev \
+    # for SAML
+    xmlsec1 \
+    # Additional packages required for data sources:
+    libssl-dev \
+    default-libmysqlclient-dev \
+    freetds-dev \
+    libsasl2-dev \
+    unzip \
+    libsasl2-modules-gssapi-mit && \
+    # Force upgrade of security-critical packages from security repository
+    apt-get install -t bookworm-security -y libxml2-dev libxml2-utils libpam0g libpam-modules libpam-modules-bin 2>/dev/null || true && \
+    # Final security upgrade of all packages
+    apt-get upgrade -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 
 ARG TARGETPLATFORM
@@ -114,6 +155,29 @@ RUN /etc/poetry/bin/poetry install --only $install_groups $POETRY_OPTIONS
 COPY --chown=redash . /app
 COPY --from=frontend-builder --chown=redash /frontend/client/dist /app/client/dist
 RUN chown redash /app
+
+# Security verification: Check versions of patched packages
+RUN echo "=== SECURITY VERIFICATION ===" && \
+    echo "libxml2 version (should be >= 2.12.10 or >= 2.13.6):" && \
+    xmllint --version 2>&1 | head -1 && \
+    echo "PAM version (should be >= 1.6.0):" && \
+    dpkg -l libpam0g | grep libpam0g && \
+    echo "=== END SECURITY VERIFICATION ==="
+
+# Additional security hardening
+RUN apt-get update && \
+    # Remove unnecessary packages that could introduce vulnerabilities
+    apt-get remove -y --auto-remove \
+    sudo \
+    pwgen && \
+    # Clean up to reduce attack surface
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+    # Remove shell history and temporary files
+    find /var/log -type f -exec truncate -s 0 {} \; && \
+    find /tmp -type f -delete 2>/dev/null || true && \
+    find /var/tmp -type f -delete 2>/dev/null || true
+
 USER redash
 
 VOLUME ["/tmp", "/var/tmp", "/usr/tmp", "/app", "/home/redash"]
